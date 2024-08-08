@@ -1,0 +1,227 @@
+/** \brief Extracts the potential between two types (interfacial, not internal) per frame.
+ * Program that extracts the potential between two types. It does not extract internal potential
+ * energy within the types (singlePotentialTypes.cpp does that).
+ */
+
+//For molecular dynamics forces and potentials
+#include "../include/MD.h"
+
+//For the molecular dynamics variables
+#include "../include/system.h"
+
+//Tossed here for your inconvienence
+class computePotential {
+	public:
+		//constructor
+		computePotential(position<double> *particles, int nParticles, double cutoff)
+		{
+			p=particles;
+			nP=nParticles;
+			cutoffSquared=cutoff*cutoff;
+			count=new int[nP];
+		};
+		
+		//destructor
+		~computePotential()
+		{
+			delete count;
+		};
+		
+		//set potential to 0
+		void initialize()
+		{
+			for(int i=0;i<nP;i++)
+				count[i]=0;
+		};
+		
+		//count by type
+		int outputCount(int type)
+		{
+			int total=0;
+			for(int i=0;i<nP;i++)
+				total+=count[i];
+			return total;
+		};
+		
+		//plain potential calculation
+		void operator() (int &i, int &j)
+		{
+			double dx=p[i].x-p[j].x;
+			double dy=p[i].y-p[j].y;
+			double dz=p[i].z-p[j].z;
+			if(dx*dx+dy*dy+dz*dz<cutoffSquared)
+			{
+				count[i]=1;
+				count[j]=1;
+			}
+		};
+		
+		//minimum image version
+		void operator() (int &i, int &j, threeVector<double> &minImg)
+		{
+			position<double> pj=p[j];
+			pj.x+=minImg.x;
+			pj.y+=minImg.y;
+			pj.z+=minImg.z;
+			double dx=p[i].x-pj.x;
+			double dy=p[i].y-pj.y;
+			double dz=p[i].z-pj.z;
+			if(dx*dx+dy*dy+dz*dz<cutoffSquared)
+			{
+				count[i]=1;
+				count[j]=1;
+			}
+		};
+		
+	private:
+		position<double> *p;
+		int nP;
+		double cutoffSquared;
+		int *count;
+};
+
+
+int main(int argc, char* argv[])
+{
+	if(argc!=5)
+	{
+		//so simple, this can't possibly mess it up
+		std::cout << "Extracts the potential and count between two molecules (interfacial, not internal) from a name.mpd file.\n";
+		std::cout << "usage: " << argv[0] << " name beadMol mol cutoff\n";
+		return 0;
+	}
+	
+	//read in options
+	char *name=argv[1];
+	int beadMol,mol;
+	double cutoff;
+	std::stringstream cmdInp;
+	cmdInp << argv[2] << ' ' << argv[3] << ' ' << argv[4] << '\n';
+	cmdInp >> beadMol >> mol >> cutoff;
+	
+	//Configuration variables
+	Blob<double> System;
+	
+	//load old variables, then initialize them
+	Script<double, Blob <double> > fileIO(name,std::ios::in,&System);
+	fileIO.read();
+	fileIO.close();
+	
+	std::cout << "#time potential count_of_Type_" << beadMol << '\n';
+	
+	//other molecule
+	std::vector<int> otherIndex;
+	if(mol<System.readNMolecules() && mol>=0)
+	{
+		molecule<double,fourVector<int> > m=System.getMolecule()[beadMol];
+		if(m.readType()==BEAD)
+		{
+			fourVector<int> *bond=m.getBonds();
+			cutoff+=m.getConstants()[BEADRADIUS];
+			
+			for(int j=0;j<m.readNBond();j++)
+				otherIndex.push_back(bond[j].x);
+		}
+		if(m.readType()==CHAIN)
+		{
+			fourVector<int> *bond=m.getBonds();
+			for(int j=0;j<m.readNBond();j++)
+			{
+				int start=bond[j].s[START];
+				int length=bond[j].s[LENGTH];
+				int nChains=bond[j].s[NCHAINS];
+				
+				for(int i=start;i<start+nChains*length;i+=length)
+					otherIndex.push_back(i);
+			}
+		}
+		if(m.readType()==BOND)
+		{
+			fourVector<int> *bond=m.getBonds();
+			for(int j=0;j<m.readNBond();j++)
+			{
+				otherIndex.push_back(bond[j].x);
+				otherIndex.push_back(bond[j].y);
+			}
+		}
+		if(m.readType()==BEND)
+		{
+			fourVector<int> *bond=m.getBonds();
+			for(int j=0;j<m.readNBond();j++)
+			{
+				otherIndex.push_back(bond[j].x);
+				otherIndex.push_back(bond[j].y);
+				otherIndex.push_back(bond[j].z);
+			}
+		}
+	}
+	std::sort(otherIndex.begin(),otherIndex.end());
+	std::vector<int>::iterator it;
+	it=std::unique(otherIndex.begin(),otherIndex.end());
+	otherIndex.resize(std::distance(otherIndex.begin(),it));
+	
+	//molecule BEAD
+	std::vector<int> beadIndex;
+	if(beadMol<System.readNMolecules() && beadMol>=0)
+	{
+		molecule<double,fourVector<int> > m=System.getMolecule()[beadMol];
+		if(m.readType()==BEAD)
+		{
+			fourVector<int> *bond=m.getBonds();
+			cutoff+=m.getConstants()[BEADRADIUS];
+			
+			for(int j=0;j<m.readNBond();j++)
+				beadIndex.push_back(m.getBonds()[j].x);
+		}
+		else
+		{
+			std::cerr << "Molecule wrong type! Must be BEAD (" << BEAD << ") type! #" 
+			<< beadMol << " != [0," 
+			<< System.readNMolecules() << "]" << std::endl;
+			return -1;
+		}
+	}
+	else
+	{
+		std::cerr << "Molecule out of bounds! Must be BEAD (" << BEAD << ") type! #" 
+		<< beadMol << " != [0," 
+		<< System.readNMolecules() << "]" << std::endl;
+		return -1;
+	}
+	
+	//set up our cell lists
+	Cell<double> pairInteractions(System.getPositions(), System.readNParticles(), System.readCutoff(), System.readSize());
+	
+	//potential object
+	computePotential cP(System.getPositions(), System.readNParticles(), System.getTwoBodyUconst(), System.readCutoff(), System.readNTypes(), beadMol, mol);
+	
+	std::string newName("frames_");
+	newName+=name;
+	newName+=".xyz";
+	
+	position<double> *p=System.getPositions();
+	int nParticles=System.readNParticles();
+	
+	xyzFormat<double> xyzFile(p,nParticles);
+	xyzFile.open(newName.c_str(), std::ios::in);
+	
+	double time=0;
+	while(xyzFile.load())
+	{
+		time+=System.readStoreInterval();
+		//zero count and potential
+		cP.initialize();
+		
+		//build the cell list, either one
+		pairInteractions.build();
+		
+		//compute the potential and count
+		pairInteractions.twoWayComparePeriodicIndex(cP);
+		
+		//output values
+		std::cout << time << '\t' << cP.readPotential() << '\t' << cP.outputCount(beadMol) << '\n';
+	}
+	
+	return 0;
+}
+

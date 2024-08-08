@@ -1,0 +1,20 @@
+This is a 400*400 nm^2 bilayer (~2*10^6 lipids) test program that runs 10000 tau (5*10^5 time steps). 
+If on the University of Memphis HPC, run:
+module load cuda11.2/toolkit
+make
+srun -c 1 --mem=2G -p gpuq --gres=gpu:1 -t 1-00:00:00 ./MDcuda
+
+On a normal linux desktop (with an NVIDIA GPU, at least 2 GB of RAM/GPU RAM, and the nvcc compiler), you can run:
+make
+./MDcuda
+
+Or, you can look in the Makefile to modify the nvcc compilation options.
+
+
+The output will be two files:
+energy.dat: 3 columns of time, potential energy, and kinetic energy.
+out.xyz: The initial and final configurations in xyz format.
+
+For reference, there are also two benchmark result files:
+timings_cuda.dat: Timing of different numbers of lipids for different time spans between NVIDIA V100 memcpy's.
+timings_cpu.dat: Timing of the normal (MD.cpp) molecular dynamics code compiled with the Intel compiler (2019.5, "icc -fast -qopenmp MD.cpp -o MD") and run on a two socket Intel Xeon Gold 6148 Dell server (40 cores/40 threads).
