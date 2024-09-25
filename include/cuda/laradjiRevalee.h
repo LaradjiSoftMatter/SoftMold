@@ -62,7 +62,7 @@ namespace mpd {
 		if(dr<cutoffSquared)
 		{
 			dr=std::sqrt(dr);
-			T *c=&c[nLaradjiRevaleePC*((type1*nTypes)+type2)];
+			T *c=&constants[nLaradjiRevaleePC*((type1*nTypes)+type2)];
 			
 			if(dr<=c[0])
 			{
