@@ -44,9 +44,16 @@ The MDcuda executable can be used in place of the MD executable (with no other m
 # Recent addition:
 deltaLT parameter. By adding the following to your mpd file:
 ```
-deltaLT [deltaL] [endL] [dimension] [relaxStep]
+deltaLT [deltaL X] [deltaL Y] [deltaL Z] [endL X] [endL Y] [endL Z] [relaxStep]
 ```
-your system will perform linear steps of deltaL (float, rmin units) to the size endL (float, rmin units) along a dimension (integers where 0=x, 1=y, and 2=z) with relaxStep (integer number of deltaT steps) intervals in between.
+your system will perform linear steps of deltaL (float, rmin units) to the size endL (float, rmin units) along all dimensions with relaxStep (integer number of deltaT steps) intervals in between. Additionally, setting any deltaL dimension to 0 will disable resizing along that dimension.
+
+The following will resize (positive or negative doesn't matter) the Z dimension by 0.01 rmin steps to 40 rmin length:
+```
+deltaLT 0 0 0.01 40 40 40 10
+```
+
+The resize time will depend on the initial dimensions of the system, and restarting the system will continue from the last size stored in the mpd file.
 
 # Top (./) directory:
 ## ./MD.cpp: 

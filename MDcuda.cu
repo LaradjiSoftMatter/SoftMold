@@ -422,8 +422,8 @@ int main(int argc, char* argv[])
 		//short section to resize a dimension of the system over time
 		if(System.readDeltaLT().ready(i))
 		{
-			threeVector<double> newSize=System.readDeltaLT().newSize(System.readSize());
-			threeVector<double> scaleFactor=System.readDeltaLT().scaleFactor(System.readSize());
+			threeVector<float> newSize=System.readDeltaLT().newSize(System.readSize());
+			threeVector<float> scaleFactor=System.readDeltaLT().scaleFactor(System.readSize());
 			
 			mpd::rescale_device(state.deviceState(),scaleFactor);
 			state.resize(newSize);

@@ -28,25 +28,26 @@ struct deltaLT {
 	// shrinking the volume within 1.9 ms (100000 tau).
 	//Once the Z dimension reaches that size, the system will 
 	// no longer change size.
-	T deltaL,endL;
-	int dim, relaxStep;
+	threeVector<T> deltaL,endL;
+	int relaxStep;
 	
 	//Just ensure they are all zero, we will use deltaL==0 to indicate inactive
-	deltaLT():deltaL(0),endL(0),dim(0),relaxStep(0){}
+	deltaLT():deltaL(0),endL(0),relaxStep(0){}
 	
 	//Return a new size based on the activity
 	constexpr threeVector<T> newSize(threeVector<T> oldSize)
 	{
-		T diff=oldSize.s[dim]-endL;
+		threeVector<T> diff=oldSize-endL;
 		//Check if it is within the last step
-		if(std::abs(diff)>deltaL)
+		for(int dim=2;dim!=-1;--dim)
+		if(std::abs(diff.s[dim])>deltaL.s[dim])
 		{
-			T direction=diff/std::abs(diff);
-			oldSize.s[dim]-=deltaL*direction;
+			T direction=diff.s[dim]/std::abs(diff.s[dim]);
+			oldSize.s[dim]-=deltaL.s[dim]*direction;
 		}
 		else
 			//this will make a smaller step to the end length
-			oldSize.s[dim]=endL;
+			oldSize.s[dim]=endL.s[dim];
 		
 		return oldSize;
 	}
@@ -59,37 +60,36 @@ struct deltaLT {
 		
 		threeVector<T> scale=1.0;
 		
-		scale.s[dim]=1.0+(nextSize.s[dim]-oldSize.s[dim])/oldSize.s[dim];
+		for(int dim=2;dim!=-1;--dim)
+			scale.s[dim]=1.0+(nextSize.s[dim]-oldSize.s[dim])/oldSize.s[dim];
 		
 		return scale;
 	}
 	
 	constexpr bool ready(int step)
 	{
-		return (deltaL!=0 && step%relaxStep==0);
+		return ((deltaL.x!=0 || deltaL.y!=0 || deltaL.z!=0) && step%relaxStep==0);
 	}
 	
 	constexpr bool active()
 	{
-		return deltaL!=0;
+		return deltaL.x!=0 || deltaL.y!=0 || deltaL.z!=0;
 	}
 	
-	constexpr int nWords() const {return 4;}
+	constexpr int nWords() const {return 7;}
 	
 	std::istream &inStep(std::istream &stream, int wStep)
 	{
 		switch(wStep)
 		{
-			case 0: stream >> deltaL; break;
-			case 1: stream >> endL; break;
-			case 2: stream >> dim; 
-				if(dim<0 || dim>2)
-				{
-					std::cerr << "deltaLT dimension, " << dim << ", out of bounds!" << std::endl;
-					throw 1;
-				}
-				break;
-			case 3: stream >> relaxStep; break;
+			case 0: stream >> deltaL.x; break;
+			case 1: stream >> deltaL.y; break;
+			case 2: stream >> deltaL.z; break;
+
+			case 3: stream >> endL.x; break;
+			case 4: stream >> endL.y; break;
+			case 5: stream >> endL.z; break;
+			case 6: stream >> relaxStep; break;
 			default:
 				std::cerr << "Forgot to reset input word counter!";
 				throw 1;
@@ -102,10 +102,13 @@ struct deltaLT {
 	{
 		switch(wStep)
 		{
-			case 0: stream << deltaL << ' '; break;
-			case 1: stream << endL << ' '; break;
-			case 2: stream << dim << ' '; break;
-			case 3: stream << relaxStep << '\n'; break;
+			case 0: stream << deltaL.x << ' '; break;
+			case 1: stream << deltaL.y << ' '; break;
+			case 2: stream << deltaL.z << ' '; break;
+			case 3: stream << endL.x << ' '; break;
+			case 4: stream << endL.y << ' '; break;
+			case 5: stream << endL.z << ' '; break;
+			case 6: stream << relaxStep << '\n'; break;
 			default:
 				std::cerr << "Forgot to reset output word counter!";
 				throw 1;
