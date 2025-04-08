@@ -1,0 +1,13 @@
+Bootstrap: docker
+From: nvidia/cuda:12.6.0-devel-ubuntu22.04
+
+%post
+    apt-get update
+    apt-get install -y git build-essential python3 python3-pip gcc wget ocl-icd-opencl-dev opencl-headers clinfo libclblast-dev libopenblas-dev
+    git clone https://github.com/LaradjiSoftMatter/SoftMold.git
+    cd SoftMold
+    mkdir ~/bin/
+    nvcc -Xcompiler -fopenmp -std=c++14 MDcuda.cu -O3 -gencode=arch=compute_90,code=sm_90 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_70,code=sm_70 -o /usr/bin/MDcuda
+
+%runscript
+    MDcuda

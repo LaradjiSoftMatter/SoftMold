@@ -13,7 +13,7 @@ PREFIX=$(HOME)
 endif
 
 cuda:
-	nvcc -Xcompiler -fopenmp -std=c++14 MDcuda.cu -O3 --gpu-architecture=compute_70 -o MDcuda
+	nvcc -Xcompiler -fopenmp -std=c++14 MDcuda.cu -O3 --gpu-architecture=all-major -o MDcuda
 
 .PHONY: all
 
