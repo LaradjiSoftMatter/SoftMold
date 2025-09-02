@@ -953,6 +953,11 @@ void dataExtraction<T,U>::compute()
 				potential+=(*System).doBoundaryPotential(k);
 				break;
 			}
+			case OFFSET_BOUNDARY:
+			{
+				(*System).doOffsetBoundaryPotential(k);
+				break;
+			}
 			case FLOATING_BASE:
 			{
 				potential+=(*System).doFloatingBasePotential(k);
@@ -1223,6 +1228,11 @@ void dataExtraction<T,U>::compute()
 					cytoPotential+=(*System).doBoundaryPotential(cytoList[k]);
 					break;
 				}	
+				case OFFSET_BOUNDARY:
+				{
+					(*System).doOffsetBoundaryPotential(k);
+					break;
+				}
 				case NANOCORE:
 				{
 					cytoPotential+=(*System).doNanoCorePotential(k);

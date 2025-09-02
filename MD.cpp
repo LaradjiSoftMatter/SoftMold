@@ -228,6 +228,11 @@ int main(int argc, char* argv[])
 				System.doBoundaryForce(k);
 				break;
 			}
+			case OFFSET_BOUNDARY:
+			{
+				System.doOffsetBoundaryForce(k);
+				break;
+			}
 			case FLOATING_BASE:
 			{
 				System.doFloatingBaseForce(k);
@@ -442,6 +447,11 @@ int main(int argc, char* argv[])
 				case BOUNDARY:
 				{
 					System.doBoundaryForce(k);
+					break;
+				}
+				case OFFSET_BOUNDARY:
+				{
+					System.doOffsetBoundaryForce(k);
 					break;
 				}
 				case FLOATING_BASE:
