@@ -218,15 +218,18 @@ void Langevin<T>::initialize(threeVector<T> *acceleration, threeVector<T> *veloc
 template <typename T>
 Langevin<T>::~Langevin()
 {
+	if(randNum!=NULL)
+	{
 	#ifdef _OPENMP
 		for(int i=0;i<omp_get_max_threads();i++)
 			delete randNum[i];
 	#else
 		delete randNum[0];
 	#endif
+	delete randNum;
+	}
 	if(sT!=NULL)
 		delete sT;
-	delete randNum;
 }
 
 template <typename T>
