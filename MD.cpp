@@ -22,10 +22,10 @@
 //#define OMP_MOLECULES
 
 //Enable error readout and halting
-//#define ERRORS_ENABLED
+#define ERRORS_ENABLED
 
 //Enable warning readout and halting
-//#define WARNINGS_ENABLED
+#define WARNINGS_ENABLED
 
 //For anchor data
 //#define ANCHOR_DATA
@@ -79,6 +79,9 @@ int main(int argc, char* argv[])
 	}
 	
 	char *name=argv[1];
+	//Alternate name for mpd.tmp file to preserve a copy of the mpd file
+	std::string nameA(name);
+	nameA+=".tmp";
 	
 	//the variables for the simulation, remember that for some reason constructor isn't explicit when nothing is in it
 	Blob<double> System;
@@ -86,9 +89,27 @@ int main(int argc, char* argv[])
 	//load variables, then initialize them, Script requires some functions from Blob
 	Script<double, Blob <double> > fileIO(name,std::ios::in,&System);
 	
-	fileIO.read();
-	
-	fileIO.close();
+	try {
+		std::cout << "Trying " << name << std::endl;
+		fileIO.read();
+		fileIO.close();
+	} catch(int e)
+	{
+		std::cout << "Incomplete file from " << name << std::endl;
+		if(e==0)
+		{
+			std::cout << "Trying " << nameA << std::endl;
+			fileIO.close();
+			fileIO.open(nameA.c_str(),std::ios::in);
+			fileIO.read();
+			fileIO.close();
+		}
+		else
+		{
+			std::cerr << "Cannot open temp file! System load failure!" << std::endl;
+			return -1;
+		}
+	}
 	
 	threeVector<double> *acc=System.getAccelerations();
 	
@@ -138,7 +159,7 @@ int main(int argc, char* argv[])
 	}
 	else
 	{
-		std::cout << "Error(main): No gamma available!\n";
+		std::cerr << "Error(main): No gamma available!\n";
 		return 0;
 	}
 	
@@ -377,6 +398,10 @@ int main(int argc, char* argv[])
 		
 		if(i%storeint==0 && i!=startInt)
 		{
+			fileIO.open(nameA.c_str(),std::ios::out);
+			fileIO.write();
+			fileIO.close();
+			
 			fileIO.open(name,std::ios::out);
 			fileIO.write();
 			fileIO.close();
