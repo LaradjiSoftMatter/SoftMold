@@ -22,10 +22,10 @@
 //#define OMP_MOLECULES
 
 //Enable error readout and halting
-#define ERRORS_ENABLED
+//#define ERRORS_ENABLED
 
 //Enable warning readout and halting
-#define WARNINGS_ENABLED
+//#define WARNINGS_ENABLED
 
 //For anchor data
 //#define ANCHOR_DATA
