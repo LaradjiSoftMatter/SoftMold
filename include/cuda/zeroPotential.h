@@ -31,7 +31,7 @@ namespace mpd {
 		
 		zeroPotential_kernel<<<numBlocks,numThreads>>>(data);
 		CUDA_Kernel_Errors();
-		CUDA_API_Errors((cudaDeviceSynchronize());
+		CUDA_API_Errors(cudaDeviceSynchronize());
 	}
 }
 

@@ -26,6 +26,7 @@ namespace cg=cooperative_groups;
 //3. calcHash(cData.deviceCell(),p)
 //4. sortParticles(cData.deviceCell())
 //5. reorderDataAndFindCellStart(cData.deviceCell(),p,v)
+//5a. update timeStep, an optimization to reduce rebuilding arrays
 //6. collide(cData.deviceCell(),constants)
 //7. forceRedistribution(cData.deviceCell(),a)
 //8. goto 2
@@ -45,7 +46,7 @@ namespace mpd {
 		cell(uint nP, T rc, threeVector<T> s, T dL):
 			nParticles(nP),gridParticleIndex_h(nP),gridParticleHash_h(nP),sortedPos_h(nP),
 			sortedVel_h(nP),sortedAcc_h(nP),cutoff(rc),cellBegin_d(),cellEnd_d(NULL),maxCells(0),
-			potentialEnergy_h(nP),potentialEnergy_d(NULL)
+			potentialEnergy_h(nP),potentialEnergy_d(NULL),mask_h(nP),mask_d(NULL),timeStep(-1)
 		{
 			gridSize.x=0;
 			gridSize.y=0;
@@ -63,6 +64,8 @@ namespace mpd {
 			CUDA_API_Errors(cudaDeviceSynchronize());
 			CUDA_API_Errors( cudaMalloc((void **)&potentialEnergy_d, nP*sizeof(T)) );
 			CUDA_API_Errors(cudaDeviceSynchronize());
+			CUDA_API_Errors( cudaMalloc((void **)&mask_d, nP*sizeof(int)) );
+			CUDA_API_Errors(cudaDeviceSynchronize());
 		}
 		
 		~cell()
@@ -75,6 +78,7 @@ namespace mpd {
 			if(cellBegin_d!=NULL) CUDA_API_Warnings(cudaFree(cellBegin_d));
 			if(cellEnd_d!=NULL) CUDA_API_Warnings(cudaFree(cellEnd_d));
 			if(potentialEnergy_d!=NULL) CUDA_API_Warnings(cudaFree(potentialEnergy_d));
+			if(mask_d!=NULL) CUDA_API_Warnings(cudaFree(mask_d));
 		}
 		
 		void resize(threeVector<T> s, T dL)
@@ -112,6 +116,7 @@ namespace mpd {
 		std::vector<threeVector<T>> sortedVel_h;
 		std::vector<threeVector<T>> sortedAcc_h;
 		std::vector<T> potentialEnergy_h;
+		std::vector<uint> mask_h;
 		
 		//device pointers
 		uint *gridParticleIndex_d;
@@ -122,6 +127,7 @@ namespace mpd {
 		threeVector<T> *sortedVel_d;
 		threeVector<T> *sortedAcc_d;
 		T *potentialEnergy_d;
+		uint *mask_d;
 		
 		//other parameters
 		threeVector<int> gridSize;
@@ -130,6 +136,7 @@ namespace mpd {
 		threeVector<T> size;
 		uint nParticles;
 		uint maxCells;
+		int timeStep;
 		
 		struct copyCell;
 		
@@ -137,7 +144,7 @@ namespace mpd {
 		{
 			return copyCell(gridParticleIndex_d,gridParticleHash_d,sortedPos_d,sortedVel_d,
 					sortedAcc_d,potentialEnergy_d,cellBegin_d,cellEnd_d,gridSize,
-					cellSize,size,cutoff,nParticles);
+					cellSize,size,cutoff,nParticles,mask_d);
 		}
 		
 		copyCell hostCell()
@@ -145,22 +152,23 @@ namespace mpd {
 			return copyCell(gridParticleIndex_h.data(),gridParticleHash_h.data(),
 					sortedPos_h.data(),sortedVel_h.data(),sortedAcc_h.data(),
 					potentialEnergy_h.data(),cellBegin_h.data(),cellEnd_h.data(),
-					gridSize,cellSize,size,cutoff,nParticles);
+					gridSize,cellSize,size,cutoff,nParticles,mask_h.data());
 		}
 		
 		struct copyCell {
 			copyCell(uint *gpi, uint *gph, position<T> *sP, threeVector<T> *sV, 
 				 threeVector<T> *sA, T* pE, uint *cB, uint *cE,threeVector<int> gS,
-				 threeVector<T> cS, threeVector<T> s, T rc, uint nP):
+				 threeVector<T> cS, threeVector<T> s, T rc, uint nP, uint *m):
 				gridParticleIndex(gpi),gridParticleHash(gph),p(sP),v(sV),a(sA),
 				potentialEnergy(pE),cellBegin(cB),cellEnd(cE),gridSize(gS),
-				cellSize(cS),cutoff(rc),size(s),nParticles(nP)
+				cellSize(cS),cutoff(rc),size(s),nParticles(nP),timeStep(-1),mask(m)
 			{}
 			
 			uint *gridParticleIndex;
 			uint *gridParticleHash;
 			uint *cellBegin;
 			uint *cellEnd;
+			uint *mask;
 			position<T> *p;
 			threeVector<T> *v;
 			threeVector<T> *a;
@@ -170,6 +178,7 @@ namespace mpd {
 			threeVector<T> size;
 			T cutoff;
 			uint nParticles;
+			int timeStep;
 		};
 	};
 	
@@ -204,9 +213,7 @@ namespace mpd {
 	__host__ __device__ 
 	uint calcGridHash(threeVector<int> gPos, threeVector<int> gSize)
 	{
-		//	hashIndices[i].key=x+y*nCells.x+z*nCells.x*nCells.y;
 		return gPos.x+gPos.y*gSize.x+gPos.z*gSize.x*gSize.y;
-		//return gPos.z*gSize.y*gSize.x+gPos.y*gSize.x+gPos.x;
 	}
 	
 	// calculate grid hash value for each particle
@@ -214,9 +221,6 @@ namespace mpd {
 	__global__
 	void calcHash_kernel(CELL cData, position<T> *p)
 	{
-		//uint index=blockIdx.x*blockDim.x+threadIdx.x;
-		
-		//if (index>=cData.nParticles) return;
 		uint offset=gridDim.x*blockDim.x;
 		for(uint index=blockIdx.x* blockDim.x + threadIdx.x;index<cData.nParticles;index+=offset)
 		{
@@ -251,6 +255,17 @@ namespace mpd {
 		}
 	}
 	
+	//This should be run after reorderDataAndFindCellStart_kernel 
+	template <typename T, typename CELL, typename MASK>
+	void generateMask_device(CELL cData, position<T> *p, MASK maskit)
+	{
+		int totalCells=nCells(cData.gridSize);
+		thrust::fill(thrust::device_ptr<uint>(cData.mask),
+			     thrust::device_ptr<uint>(cData.mask+totalCells),
+			     0xFFFFFFFF);
+		
+	}
+	
 	template <typename CELL>
 	void sortParticles_device(CELL cData)
 	{
@@ -282,9 +297,7 @@ namespace mpd {
 	__global__
 	void emptyCells_kernel(CELL cData)
 	{
-		//uint index = blockIdx.x*blockDim.x+threadIdx.x;
 		int totalCells=nCells(cData.gridSize);
-		//if(index>=totalCells) return;
 		uint offset=gridDim.x*blockDim.x;
 		for(uint index=blockIdx.x* blockDim.x + threadIdx.x;index<totalCells;index+=offset)
 		{
@@ -304,7 +317,6 @@ namespace mpd {
 			     thrust::device_ptr<uint>(cData.cellEnd+totalCells),
 			     0xFFFFFFFF);
 	}
-	
 	
 	template <typename CELL>
 	void emptyCells_host(CELL cData)
@@ -806,50 +818,61 @@ namespace mpd {
 	
 	
 	template <typename CELL, typename STATE>
-	void cellComputeForce_host(CELL cData, STATE state)
+	void cellComputeForce_host(CELL cData, STATE state,int timeStep)
 	{
-		emptyCells_host(cData);
-		calcHash_host(cData,state.p);
-		sortParticles_host(cData);
-		reorderDataAndFindCellStart_host(cData,state.p,state.v);
+		if(cData.timeStep!=timeStep || timeStep<=0)
+		{
+			emptyCells_host(cData);
+			calcHash_host(cData,state.p);
+			sortParticles_host(cData);
+			reorderDataAndFindCellStart_host(cData,state.p,state.v);
+			cData.timeStep=timeStep;
+		}
 		collideForce_host(cData,state.NBFconstants,state.nTypes);
 		vRedistributionByParticle_host(cData.gridParticleIndex,cData.a,state.a,state.nParticles);
 	}
 	
 	template <typename CELL, typename STATE, typename DATACOLLECTION>
-	void cellComputePotential_host(CELL cData, STATE state, DATACOLLECTION data)
+	void cellComputePotential_host(CELL cData, STATE state, DATACOLLECTION data,int timeStep)
 	{
-		emptyCells_host(cData);
-		calcHash_host(cData,state.p);
-		sortParticles_host(cData);
-		reorderDataAndFindCellStart_host(cData,state.p,state.v);
+		if(cData.timeStep!=timeStep || timeStep<=0)
+		{
+			emptyCells_host(cData);
+			calcHash_host(cData,state.p);
+			sortParticles_host(cData);
+			reorderDataAndFindCellStart_host(cData,state.p,state.v);
+			cData.timeStep=timeStep;
+		}
 		collidePotential_host(cData,state.NBPconstants,state.nTypes);
 		vRedistributionByParticle_host(cData.gridParticleIndex,cData.potentialEnergy,
 					       data.potentialEnergy,state.nParticles);
 	}
 	
 	template <typename CELL, typename STATE>
-	void cellComputeForce_device(CELL cData, STATE state)
+	void cellComputeForce_device(CELL cData, STATE state,int timeStep)
 	{
 		uint numBlocks=0;
 		uint numThreads=0;
 		uint blockSize=128;
 		computeGridSize(state.nParticles, blockSize, numBlocks, numThreads);
-		
-		//emptyCells_kernel<<<4096,numThreads>>>(cData);
-		emptyCells_device(cData);
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		calcHash_kernel<<<numBlocks,numThreads>>>(cData,state.p);
-		CUDA_Kernel_Errors();
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		sortParticles_device(cData);
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		
 		uint smemSize=sizeof(uint)*(numThreads+1);
-		reorderDataAndFindCellStart_kernel<<<numBlocks,numThreads,smemSize>>>(cData,state.p,state.v);
-		CUDA_Kernel_Errors();
-		CUDA_API_Errors(cudaDeviceSynchronize());
 		
+		if(cData.timeStep!=timeStep || timeStep<=0)
+		{
+			//emptyCells_kernel<<<4096,numThreads>>>(cData);
+			emptyCells_device(cData);
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			calcHash_kernel<<<numBlocks,numThreads>>>(cData,state.p);
+			CUDA_Kernel_Errors();
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			sortParticles_device(cData);
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			
+			reorderDataAndFindCellStart_kernel<<<numBlocks,numThreads,smemSize>>>(cData,state.p,state.v);
+			CUDA_Kernel_Errors();
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			cData.timeStep=timeStep;
+		}
 		collideForce_kernel<<<numBlocks,numThreads>>>(cData,state.NBFconstants,state.nTypes);
 		CUDA_Kernel_Errors();
 		CUDA_API_Errors(cudaDeviceSynchronize());
@@ -862,27 +885,30 @@ namespace mpd {
 	}
 	
 	template <typename CELL, typename STATE, typename DATACOLLECTION>
-	void cellComputePotential_device(CELL cData, STATE state, DATACOLLECTION data)
+	void cellComputePotential_device(CELL cData, STATE state, DATACOLLECTION data,int timeStep)
 	{
 		uint numBlocks=0;
 		uint numThreads=0;
 		uint blockSize=128;
 		computeGridSize(state.nParticles, blockSize, numBlocks, numThreads);
-		
-		//emptyCells_kernel<<<4096,numThreads>>>(cData);
-		emptyCells_device(cData);
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		calcHash_kernel<<<numBlocks,numThreads>>>(cData,state.p);
-		CUDA_Kernel_Errors();
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		sortParticles_device(cData);
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		
 		uint smemSize=sizeof(uint)*(numThreads+1);
-		reorderDataAndFindCellStart_kernel<<<numBlocks,numThreads,smemSize>>>(cData,state.p,state.v);
-		CUDA_Kernel_Errors();
-		CUDA_API_Errors(cudaDeviceSynchronize());
 		
+		if(cData.timeStep!=timeStep || timeStep<=0)
+		{
+			//emptyCells_kernel<<<4096,numThreads>>>(cData);
+			emptyCells_device(cData);
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			calcHash_kernel<<<numBlocks,numThreads>>>(cData,state.p);
+			CUDA_Kernel_Errors();
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			sortParticles_device(cData);
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			
+			reorderDataAndFindCellStart_kernel<<<numBlocks,numThreads,smemSize>>>(cData,state.p,state.v);
+			CUDA_Kernel_Errors();
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			cData.timeStep=timeStep;
+		}
 		collidePotential_kernel<<<numBlocks,numThreads>>>(cData,state.NBPconstants,state.nTypes);
 		CUDA_Kernel_Errors();
 		CUDA_API_Errors(cudaDeviceSynchronize());
@@ -895,28 +921,33 @@ namespace mpd {
 	}
 	
 	template <typename CELL, typename STATE, typename BAROSTAT, typename SCALE>
-	void cellComputeDPotential_device(CELL cData, STATE state, BAROSTAT bState, SCALE scale)
+	void cellComputeDPotential_device(CELL cData, STATE state, BAROSTAT bState, SCALE scale, int timeStep)
 	{
 		uint numBlocks=0;
 		uint numThreads=0;
 		uint blockSize=128;
 		computeGridSize(state.nParticles, blockSize, numBlocks, numThreads);
-		
-		//emptyCells_kernel<<<4096,numThreads>>>(cData);
-		emptyCells_device(cData);
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		calcHash_kernel<<<numBlocks,numThreads>>>(cData,state.p);
-		CUDA_Kernel_Errors();
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		sortParticles_device(cData);
-		CUDA_API_Errors(cudaDeviceSynchronize());
-		
 		uint smemSize=sizeof(uint)*(numThreads+1);
-		reorderDataAndFindCellStart_kernel<<<numBlocks,numThreads,smemSize>>>(cData,state.p,state.v);
-		CUDA_Kernel_Errors();
-		CUDA_API_Errors(cudaDeviceSynchronize());
+		
+		if(cData.timeStep!=timeStep || timeStep<=0)
+		{
+			//emptyCells_kernel<<<4096,numThreads>>>(cData);
+			emptyCells_device(cData);
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			calcHash_kernel<<<numBlocks,numThreads>>>(cData,state.p);
+			CUDA_Kernel_Errors();
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			sortParticles_device(cData);
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			
+			reorderDataAndFindCellStart_kernel<<<numBlocks,numThreads,smemSize>>>(cData,state.p,state.v);
+			CUDA_Kernel_Errors();
+			CUDA_API_Errors(cudaDeviceSynchronize());
+			cData.timeStep=timeStep;
+		}
+
 		collideDPotential_kernel<<<numBlocks,numThreads>>>(cData,state.NBPconstants,
-								   state.nTypes,scale);
+									   state.nTypes,scale);
 		CUDA_Kernel_Errors();
 		CUDA_API_Errors(cudaDeviceSynchronize());
 		//I'm going to reuse "cData.potentialEnergy" since it is overwritten everytime anyways

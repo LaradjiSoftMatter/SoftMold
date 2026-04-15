@@ -1,6 +1,7 @@
 #include <cuda.h>
 #include <cmath>
 #include "dataTypes.h"
+#include "../../include/potentials/laradjiSpangler.h"
 #ifndef MPD_POTENTIALS
 #define MPD_POTENTIALS
 

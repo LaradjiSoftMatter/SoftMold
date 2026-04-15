@@ -25,7 +25,7 @@ namespace mpd {
 		
 		zeroAccelerations_kernel<<<numBlocks,numThreads>>>(input);
 		CUDA_Kernel_Errors();
-		checkCudaErrors(cudaDeviceSynchronize());
+		CUDA_API_Errors(cudaDeviceSynchronize());
 	}
 	
 	template <typename STATE>

@@ -53,6 +53,49 @@ namespace mpd {
 		a.z*=magnitude;//1 flop
 		return a;
 	}
+	template <typename T>
+#ifdef __CUDACC__
+	__device__ __host__
+#endif
+	threeVector<T> laradjiSpanglerF(const threeVector<T> &d, const T &cutoffSquared, 
+					T *constants, const int &type1, 
+					const int &type2, const int &nTypes)
+	{
+		threeVector<T> a=0;
+		T dr=d.x*d.x+d.y*d.y+d.z*d.z;//5 flops
+		T *c=&constants[nLaradjiSpanglerFC*((type1*nTypes)+type2)];
+		T magnitude=0;
+		T rminD=c[4]+c[5];
+		T rminD2=rminD*rminD;
+		//is it in range?
+		if(rminD2<=dr && dr<cutoffSquared)
+		{
+			dr=std::sqrt(dr);
+			T E=c[0]-dr;//1 flops
+			T E2=E*E;//1 flop
+			T E3=E*E2;//1 flop
+			magnitude=2.0*(0.4*E3+c[1]*E2+c[2]*E)/(dr);
+			magnitude+=4.0*E2+8.0*c[1]*E+6.0*c[2];
+			magnitude*=(E2*c[3])/(dr*dr);//5 flops
+		}
+		else if(dr<rminD2)
+		{
+			dr=std::sqrt(dr);
+			T B=rminD-dr;
+			T B2=B*B;
+			T B3=B2*B;
+			T B4=B2*B2;
+			magnitude=(B4*c[6]+B3*c[7]+B2*c[8]+B*c[9]+c[10])/(dr);
+			magnitude+=(4.0*B3*c[6]+3.0*B2*c[7]+2.0*B*c[8]+c[9]);
+			magnitude/=dr*dr;
+		}
+		
+		a=d;
+		a.x*=magnitude;//1 flop
+		a.y*=magnitude;//1 flop
+		a.z*=magnitude;//1 flop
+		return a;
+	}
 	
 	/** \b Conservative potential between a non-bonded nanoparticle and normal particle.
 	 *  Model as described by Mohamed Laradji and Eric Spangler in 
@@ -88,6 +131,38 @@ namespace mpd {
 		return potential;
 	}
 	
+	template <typename T>
+#ifdef __CUDACC__
+	__device__ __host__
+#endif
+	T laradjiSpanglerP(const threeVector<T> &d, const T &cutoffSquared, 
+			T *constants, const int &type1, 
+			const int &type2, const int &nTypes)
+	{
+		T potential=0;
+		T dr=d.x*d.x+d.y*d.y+d.z*d.z;
+		const T *c=&constants[nLaradjiSpanglerPC*((type1*nTypes)+type2)];
+		T rminD=c[4]+c[5];
+		T rminD2=rminD*rminD;
+		if(rminD2<=dr && dr<cutoffSquared)
+		{
+			dr=std::sqrt(dr);
+			T E=c[0]-dr;//1 flops
+			T E2=E*E;//1 flop
+			T E3=E*E2;//1 flop
+			potential=2.0*E3*(0.4*E2+c[1]*E+c[2])*c[3]/(dr);
+		}
+		else if(dr<rminD2)
+		{
+			dr=std::sqrt(dr);
+			T B=rminD-dr;
+			T B2=B*B;
+			T B3=B2*B;
+			T B4=B2*B2;
+			potential=(B4*c[6]+B3*c[7]+B2*c[8]+B*c[9]+c[10])/(dr);
+		}
+		return potential;
+	}
 	/** \b Conservative force between non-bonded nanoparticles.
 	 *  Model as described by Mohamed Laradji and Eric Spangler in 
 	 *  the journal of Chemical Physics doi:10.1063/1.5138897
@@ -95,6 +170,50 @@ namespace mpd {
 	template <typename T>
 	threeVector<T> laradjiSpanglerBBF(const threeVector<T> &d, const T &cutoffSquared, 
 					const std::vector<T> &constants, const int &type1, 
+					const int &type2, const int &nTypes)
+	{
+		threeVector<T> a=0;
+		const T *c=&constants[nLaradjiSpanglerFC*((type1*nTypes)+type2)+11];//11=beadbeadOffset
+		T dr=d.x*d.x+d.y*d.y+d.z*d.z;//5 flops
+		T magnitude=0;
+		T rminD=c[0];
+		T rminD2=rminD*rminD;
+		if(rminD2<=dr && dr<cutoffSquared)
+		{
+			dr=std::sqrt(dr);
+			T E=c[1]-dr;//1 flops
+			T E2=E*E;//1 flop
+			T E3=E*E2;//1 flop
+			magnitude=E3*(6.0*c[2]*E2+5.0*c[3]*E+4.0*c[4]+
+			(c[2]*E3+c[3]*E2+c[4]*E)/dr)/(dr*dr);
+		}
+		else if(dr<rminD2)
+		{
+			dr=std::sqrt(dr);
+			T B=rminD-dr;
+			T B2=B*B;
+			T B3=B2*B;
+			T B4=B2*B2;
+			T B5=B2*B3;
+			magnitude=5.0*B4*c[5]+4.0*B3*c[6]+3.0*B2*c[7]+
+				   2.0*B*c[8]+c[9];
+			magnitude+=(B5*c[5]+B4*c[6]+B3*c[7]+
+				   B2*c[8]+B*c[9]+c[10])/(dr);
+			magnitude/=dr*dr;
+		}
+		
+		a=d;
+		a.x*=magnitude;//1 flop
+		a.y*=magnitude;//1 flop
+		a.z*=magnitude;//1 flop
+		return a;
+	}
+	template <typename T>
+#ifdef __CUDACC__
+	__device__ __host__
+#endif
+	threeVector<T> laradjiSpanglerBBF(const threeVector<T> &d, const T &cutoffSquared, 
+					T *constants, const int &type1, 
 					const int &type2, const int &nTypes)
 	{
 		threeVector<T> a=0;
@@ -141,6 +260,41 @@ namespace mpd {
 	template <typename T>
 	T laradjiSpanglerBBP(const threeVector<T> &d, const T &cutoffSquared, 
 			const std::vector<T> &constants, const int &type1, 
+			const int &type2, const int &nTypes)
+	{
+		T potential=0;
+		const T *c=&constants[nLaradjiSpanglerFC*((type1*nTypes)+type2)+11];//11=beadbeadOffset
+		T dr=d.x*d.x+d.y*d.y+d.z*d.z;
+		T rminD=c[0];
+		T rminD2=rminD*rminD;
+		if(rminD2<=dr && dr<cutoffSquared)
+		{
+			dr=std::sqrt(dr);
+			T E=c[1]-dr;//1 flops
+			T E2=E*E;//1 flop
+			T E3=E*E2;//1 flop
+			T E4=E2*E2;
+			potential=E4*(c[2]*E2+c[3]*E+c[4])/dr;
+		}
+		else if(dr<rminD2)
+		{
+			dr=std::sqrt(dr);
+			T B=rminD-dr;
+			T B2=B*B;
+			T B3=B2*B;
+			T B4=B2*B2;
+			T B5=B2*B3;
+			potential=(B5*c[5]+B4*c[6]+B3*c[7]+
+				   B2*c[8]+B*c[9]+c[10])/(dr);
+		}
+		return potential;
+	}
+	template <typename T>
+#ifdef __CUDACC__
+	__device__ __host__
+#endif
+	T laradjiSpanglerBBP(const threeVector<T> &d, const T &cutoffSquared, 
+			T *constants, const int &type1, 
 			const int &type2, const int &nTypes)
 	{
 		T potential=0;

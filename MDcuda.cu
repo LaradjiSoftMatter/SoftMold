@@ -147,15 +147,19 @@ int main(int argc, char* argv[])
 	mpd::interaction<float,2,2> bondList(nParticles);
 	//mpd::interaction<float,2,2> ballList(nParticles);
 	std::vector<mpd::interaction<float,2,2>> ballLists;
+	std::vector<mpd::nbInteraction<float,mpd::nLaradjiSpanglerFC>> beadLists;
 	mpd::cell<float> cData(nParticles,System.readCutoff(),System.readSize(),System.readDeltaLXY());
 	std::vector<float> mass(nParticles,1.0);
-	
+	float c2Cutoff=System.readCutoff();
 	//for data and resizing
 	mpd::dataCollection<float> dataCollection(nParticles);
 	
 	//Add to the bond and bend lists
 	for(int k=0;k<System.readNMolecules();k++)
 	{
+		//any pointers obtained from getMolecule will go out of scope outside here, 
+		//probably because "mol" is technically a copy and most of the "pointers"
+		//are coming from some vector.data()
 		auto mol=System.getMolecule()[k];
 		switch(mol.readType())
 		{
@@ -226,6 +230,18 @@ int main(int argc, char* argv[])
 				ballLists.emplace_back(ballList);
 				break;
 			}
+			case BEAD:
+			{
+				auto c=mol.getConstants();
+				mpd::nbInteraction<float,mpd::nLaradjiSpanglerFC> beadList(nParticles,System.readNTypes(),c);
+				auto b=mol.getBonds();
+				mass[b[0].s[0]]=(4.0)*M_PI*c[4]*c[4];
+				c2Cutoff=c[0];
+				for(int j=0;j<mol.readNBond();j++)
+					beadList.addInteraction(b[j].s[0]);//should this change to match interaction.addInteraction?
+				beadLists.emplace_back(beadList);
+				break;
+			}
 			default:
 			{
 				std::cerr << "Molecule type " << mol.readType() 
@@ -234,7 +250,7 @@ int main(int argc, char* argv[])
 			}
 		}
 	}
-	
+	mpd::cell<float> cData2(nParticles,c2Cutoff,System.readSize(),System.readDeltaLXY());
 	mpd::state<float> state(System.getPositions(),System.getVelocities(),System.getAccelerations(),
 				System.getTwoBodyFconst(),System.getTwoBodyUconst(),
 				nParticles,System.readNTypes(),System.readDeltaT(),System.readGamma(),
@@ -249,6 +265,10 @@ int main(int argc, char* argv[])
 	potentialFileName+=name;
 	potentialFileName+=".dat";
 	
+	std::string beadPotentialFileName("beadPotential_");
+	beadPotentialFileName+=name;
+	beadPotentialFileName+=".dat";
+	
 	std::string kineticFileName("kinetic_");
 	kineticFileName+=name;
 	kineticFileName+=".dat";
@@ -262,6 +282,8 @@ int main(int argc, char* argv[])
 	for(auto &ballList:ballLists)
 		ballList.toDevice();
 	bendList.toDevice();
+	for(auto &beadList:beadLists)
+		beadList.toDevice();
 	state.toDevice();
 	
 	//molecular dynamics forces
@@ -270,7 +292,9 @@ int main(int argc, char* argv[])
 	for(auto &ballList:ballLists)
 		mpd::ballForces_device(ballList.deviceInteraction(),state.deviceState());
 	mpd::bendForces_device(bendList.deviceInteraction(),state.deviceState());
-	mpd::cellComputeForce_device(cData.deviceCell(), state.deviceState());
+	mpd::cellComputeForce_device(cData.deviceCell(), state.deviceState(),0);
+	for(auto &beadList:beadLists)
+		mpd::beadForces_device(beadList.deviceInteraction(),state.deviceState(),cData2.deviceCell(),0);
 	mpd::applyMass_device(state.deviceState());
 	
 	
@@ -283,20 +307,35 @@ int main(int argc, char* argv[])
 			mpd::reduceRange_device(dataCollection.deviceState().kineticEnergy,nParticles);
 		
 		mpd::zeroRange_device(dataCollection.deviceState().potentialEnergy,nParticles);
+		mpd::zeroRange_device(dataCollection.deviceState().beadPotential,nParticles);
 		mpd::bondPotential_device(bondList.deviceInteraction(),state.deviceState(),
 					  dataCollection.deviceState());
 		for(auto &ballList:ballLists)
 			mpd::ballPotential_device(ballList.deviceInteraction(),state.deviceState(),
 					  dataCollection.deviceState());
+		for(auto &beadList:beadLists)
+			mpd::beadPotential_device(beadList.deviceInteraction(),state.deviceState(),
+					dataCollection.deviceState());
+		
 		mpd::bendPotential_device(bendList.deviceInteraction(),state.deviceState(),
 					  dataCollection.deviceState());
 		mpd::cellComputePotential_device(cData.deviceCell(),state.deviceState(),
-					  dataCollection.deviceState());
+					  dataCollection.deviceState(),0);
 		float potential=
 			mpd::reduceRange_device(dataCollection.deviceState().potentialEnergy,nParticles);
 		
 		std::fstream potentialFile(potentialFileName, std::ios::out | std::ios::app);
 		potentialFile << "0\t" << potential << std::endl;
+		
+		float beadPotential=
+			mpd::reduceRange_device(dataCollection.deviceState().beadPotential,nParticles);
+		
+		//dataCollection.toHost();
+		//for(int i=0;i<nParticles;i++)
+		//	std::cout << int(std::abs(dataCollection.beadPotential_h[i])) << ' ' <<
+		//		p[i].x << ' ' << p[i].y << ' ' << p[i].z << '\n';
+		std::fstream beadPotentialFile(beadPotentialFileName, std::ios::out | std::ios::app);
+		beadPotentialFile << "0\t" << beadPotential << std::endl;
 		
 		std::fstream kineticFile(kineticFileName, std::ios::out | std::ios::app);
 		kineticFile << "0\t" << kinetic << std::endl;
@@ -340,7 +379,7 @@ int main(int argc, char* argv[])
 	{
 		System.setInitialTime((float)i*System.readDeltaT());
 		
-		mpd::verletFirst_device(state.deviceState());
+		mpd::verletFirst_device(state.deviceState());//Postions have been updated
 		mpd::zeroRange_device(state.deviceState().a,nParticles);
 		//The system is stored here because force is updated here, but velocities are updated next.
 		//It causes a problem when it reenters the loop from a previously run configuration.
@@ -365,10 +404,13 @@ int main(int argc, char* argv[])
 		}
 		state.temperature=System.readInitialTemp();
 		mpd::langevin_device(state.deviceState(),random.deviceState());
-		mpd::cellComputeForce_device(cData.deviceCell(), state.deviceState());
+		mpd::cellComputeForce_device(cData.deviceCell(), state.deviceState(),i);
 		mpd::bondForces_device(bondList.deviceInteraction(),state.deviceState());
 		for(auto &ballList:ballLists)
 			mpd::ballForces_device(ballList.deviceInteraction(),state.deviceState());
+		for(auto &beadList:beadLists)
+			mpd::beadForces_device(beadList.deviceInteraction(),state.deviceState(),
+					cData2.deviceCell(),i);
 		mpd::bendForces_device(bendList.deviceInteraction(),state.deviceState());
 		mpd::applyMass_device(state.deviceState());
 		mpd::verletSecond_device(state.deviceState());
@@ -386,6 +428,7 @@ int main(int argc, char* argv[])
 			
 			//Data calculations
 			mpd::zeroRange_device(dataCollection.deviceState().kineticEnergy,nParticles);
+			mpd::zeroRange_device(dataCollection.deviceState().beadPotential,nParticles);
 			mpd::kinetic_device(state.deviceState(),dataCollection.deviceState());
 			float kinetic=
 				mpd::reduceRange_device(dataCollection.deviceState().kineticEnergy,nParticles);
@@ -396,18 +439,27 @@ int main(int argc, char* argv[])
 			for(auto &ballList:ballLists)
 				mpd::ballPotential_device(ballList.deviceInteraction(),state.deviceState(),
 						  dataCollection.deviceState());
+			for(auto &beadList:beadLists)
+				mpd::beadPotential_device(beadList.deviceInteraction(),state.deviceState(),
+						  dataCollection.deviceState());
 			mpd::bendPotential_device(bendList.deviceInteraction(),state.deviceState(),
 						  dataCollection.deviceState());
 			mpd::cellComputePotential_device(cData.deviceCell(),state.deviceState(),
-						  dataCollection.deviceState());
+						  dataCollection.deviceState(),i);
 			float potential=
 				mpd::reduceRange_device(dataCollection.deviceState().potentialEnergy,nParticles);
+			float beadPotential=
+				mpd::reduceRange_device(dataCollection.deviceState().beadPotential,nParticles);
 			
 			//dataCollection.toHost();
 			//state.toHost();
 			
 			std::fstream potentialFile(potentialFileName, std::ios::out | std::ios::app);
 			potentialFile << System.readInitialTime() << "\t" << potential << std::endl;
+			
+			std::fstream beadPotentialFile(beadPotentialFileName, std::ios::out | std::ios::app);
+			beadPotentialFile << System.readInitialTime() << '\t' << beadPotential << std::endl;
+		
 			
 			std::fstream kineticFile(kineticFileName, std::ios::out | std::ios::app);
 			kineticFile << System.readInitialTime() << "\t" << kinetic << std::endl;
@@ -429,6 +481,7 @@ int main(int argc, char* argv[])
 			state.resize(newSize);
 			//this could be deleted if the above is universal
 			cData.resize(newSize,System.readDeltaLXY());
+			cData2.resize(newSize,System.readDeltaLXY());
 			System.setSize(newSize);
 		}
 		//short section to resize system, note that it only works when deltaLXY 
@@ -454,10 +507,13 @@ int main(int argc, char* argv[])
 			for(auto &ballList:ballLists)
 				mpd::ballDPotential_device(ballList.deviceInteraction(),state.deviceState(),
 						  bStat.deviceState(),scale);
+			for(auto &beadList:beadLists)
+				mpd::beadDPotential_device(beadList.deviceInteraction(),state.deviceState(),
+					bStat.deviceState(),scale);
 			mpd::bendDPotential_device(bendList.deviceInteraction(),state.deviceState(),
 						  bStat.deviceState(),scale);
 			mpd::cellComputeDPotential_device(cData.deviceCell(),state.deviceState(),
-						  bStat.deviceState(),scale);
+						  bStat.deviceState(),scale,i);
 			float dPotential=
 				mpd::reduceRange_device(bStat.deviceState().dPotential,nParticles);
 			if(bStat.MCtest(dPotential, System.readInitialTemp(), 0.0, 
@@ -470,6 +526,7 @@ int main(int argc, char* argv[])
 				state.resize(newSize);
 				//this could be deleted if the above is universal
 				cData.resize(newSize,System.readDeltaLXY());
+				cData2.resize(newSize,System.readDeltaLXY());
 				System.setSize(newSize);
 				resizeHist[(fluctuation.x+maxInterval)/resizeHistInterval]+=0.5;
 				resizeHist[(fluctuation.y+maxInterval)/resizeHistInterval]+=0.5;

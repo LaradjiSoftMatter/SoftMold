@@ -4,6 +4,8 @@
 #include "potentials.h"
 #include "reducePotential.h"
 #include "interaction.h"
+#include "nbInteraction.h"
+#include "beadInteractions.h"
 #include "verlet.h"
 #include "langevin.h"
 #include "kinetic.h"
